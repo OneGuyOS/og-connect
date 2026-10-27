@@ -22,6 +22,8 @@ from .panes import ComputerPane, PhonePane
 from .transfer import TransferDirection, TransferSpec
 from .transfer_queue import TransferQueue
 from .transfer_ui import TransferQueuePanel
+from .viewer import ImageViewer
+from .workers import detach_all_tasks
 
 
 class MainWindow(QMainWindow):
@@ -41,6 +43,7 @@ class MainWindow(QMainWindow):
         self.transfer_queue = TransferQueue(self)
         self.transfer_panel = TransferQueuePanel(self.transfer_queue)
         self._conflict_prompts = {}
+        self._viewer: ImageViewer | None = None
 
         files_page = QWidget()
         files_layout = QVBoxLayout(files_page)
@@ -68,11 +71,27 @@ class MainWindow(QMainWindow):
 
         self.computer_pane.copy_to_phone_requested.connect(self._copy_to_phone)
         self.phone_pane.copy_to_computer_requested.connect(self._copy_to_computer)
+        self.computer_pane.open_image_requested.connect(
+            lambda path, paths: self._open_image(path, paths, False)
+        )
+        self.phone_pane.open_image_requested.connect(
+            lambda path, paths: self._open_image(path, paths, True)
+        )
         self.transfer_queue.conflict_needed.connect(self._ask_destination_conflict)
         self.transfer_queue.changed.connect(self._update_transport)
         manager.state_changed.connect(self._update_status)
         self._update_status(manager.state, manager.session)
         self._update_transport()
+
+    def _open_image(self, path: str, paths: list[str], is_phone: bool) -> None:
+        session = self._manager.session if is_phone else None
+        serial = session.device.serial if session is not None else None
+        if self._viewer is None:
+            self._viewer = ImageViewer(self._manager, self)
+        self._viewer.open_image_set(paths, path, is_phone, serial)
+        self._viewer.show()
+        self._viewer.raise_()
+        self._viewer.activateWindow()
 
     def _update_transport(self) -> None:
         text = "USB (ADB)" if self.transfer_queue.is_running else "—"
@@ -192,3 +211,13 @@ class MainWindow(QMainWindow):
         else:
             text = "No phone connected"
         self._status.setText(text)
+
+    def closeEvent(self, event) -> None:
+        timer = getattr(self._manager, "_timer", None)
+        if timer is not None:
+            timer.stop()
+        self.transfer_queue.cancel_all()
+        if self._viewer is not None:
+            self._viewer.close()
+        detach_all_tasks()
+        super().closeEvent(event)

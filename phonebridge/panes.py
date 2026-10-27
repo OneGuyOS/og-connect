@@ -7,7 +7,7 @@ from pathlib import Path
 import shlex
 from typing import Optional
 
-from PySide6.QtCore import QDir, QModelIndex, Qt, QThreadPool, Signal
+from PySide6.QtCore import QDir, QItemSelectionModel, QModelIndex, Qt, QThreadPool, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from . import adb
 from .device import ConnectionState, DeviceManager, PhoneSession
 from .files_model import PhoneFileModel, parse_ls_output
+from .viewer import is_image_candidate
 from .workers import FunctionTask
 
 
@@ -41,6 +42,7 @@ class ComputerPane(QWidget):
     """Browse the home directory with QFileSystemModel's live updates."""
 
     copy_to_phone_requested = Signal(object)
+    open_image_requested = Signal(object, object)
 
     def __init__(self, manager: DeviceManager, parent=None) -> None:
         super().__init__(parent)
@@ -93,7 +95,11 @@ class ComputerPane(QWidget):
         index = self.view.indexAt(position)
         if index.isValid() and not self.view.selectionModel().isSelected(index):
             self.view.clearSelection()
-            self.view.selectRow(index.row())
+            self.view.selectionModel().select(
+                index,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
         selected = self.view.selectionModel().selectedRows(0)
         paths = [self._model.filePath(item) for item in selected]
         files = [path for path in paths if not self._model.isDir(self._model.index(path))]
@@ -114,11 +120,30 @@ class ComputerPane(QWidget):
         copy_action.setEnabled(connected and bool(files) and not has_directories)
         copy_action.triggered.connect(lambda: self.copy_to_phone_requested.emit(files))
         menu.addAction(copy_action)
-        image_action = QAction("Open image (viewer not implemented)", menu)
-        image_action.setEnabled(False)
+        selected_file = None
+        if index.isValid() and not self._model.isDir(index):
+            selected_file = self._model.filePath(index)
+        elif files:
+            selected_file = files[0]
+        image_paths = self._image_paths(selected_file) if selected_file else []
+        image_action = QAction("Open image" if selected_file else "Open image (select a file)", menu)
+        image_action.setEnabled(selected_file is not None)
+        image_action.triggered.connect(
+            lambda: self.open_image_requested.emit(selected_file, image_paths)
+        )
         menu.addAction(image_action)
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(self.view.viewport().mapToGlobal(position))
+
+    def _image_paths(self, selected_path: str) -> list[str]:
+        root = self.view.rootIndex()
+        all_files = []
+        for row in range(self._model.rowCount(root)):
+            index = self._model.index(row, 0, root)
+            path = self._model.filePath(index)
+            if not self._model.isDir(index):
+                all_files.append(path)
+        return [path for path in all_files if path == selected_path or is_image_candidate(path)]
 
     def navigate(self, path: str) -> None:
         resolved = os.path.abspath(path)
@@ -149,6 +174,7 @@ class PhonePane(QWidget):
     """Browse `/storage/emulated/0` over the active USB ADB session."""
 
     copy_to_computer_requested = Signal(object)
+    open_image_requested = Signal(object, object)
 
     def __init__(self, manager: DeviceManager, parent=None) -> None:
         super().__init__(parent)
@@ -328,11 +354,32 @@ class PhonePane(QWidget):
         copy_action.setEnabled(connected and bool(files) and not has_directories)
         copy_action.triggered.connect(lambda: self.copy_to_computer_requested.emit(paths))
         menu.addAction(copy_action)
-        image_action = QAction("Open image (viewer not implemented)", menu)
-        image_action.setEnabled(False)
+        selected_file = None
+        if index.isValid():
+            entry = self._model.entry_at(index.row())
+            if entry is not None and not entry.is_dir:
+                selected_file = str(Path(self.current_path, entry.name))
+        elif files:
+            selected_file = str(Path(self.current_path, files[0].name))
+        image_paths = self._image_paths(selected_file) if selected_file else []
+        image_action = QAction("Open image" if selected_file else "Open image (select a file)", menu)
+        image_action.setEnabled(selected_file is not None and connected)
+        image_action.triggered.connect(
+            lambda: self.open_image_requested.emit(selected_file, image_paths)
+        )
         menu.addAction(image_action)
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(self.view.viewport().mapToGlobal(position))
+
+    def _image_paths(self, selected_path: str) -> list[str]:
+        paths = []
+        for row in range(self._model.rowCount()):
+            entry = self._model.entry_at(row)
+            if entry is not None and not entry.is_dir:
+                path = str(Path(self.current_path, entry.name))
+                if path == selected_path or is_image_candidate(path):
+                    paths.append(path)
+        return paths
 
     def navigate(self, name: str) -> None:
         if self._manager.session is None or self._serial is None:

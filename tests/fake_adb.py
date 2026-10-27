@@ -78,6 +78,8 @@ def main() -> int:
     if mode == "exec-out":
         if len(args) == 6 and args[3:5] == ["sh", "-c"]:
             return stream_from_remote(args[5])
+        if len(args) >= 5 and args[3] == "cat":
+            return stream_from_remote(" ".join(args[3:]))
         print("unsupported simulated exec-out command", file=sys.stderr)
         return 2
     print("unsupported simulated adb command", file=sys.stderr)
