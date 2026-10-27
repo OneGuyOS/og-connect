@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path, PurePosixPath
 
-from PySide6.QtCore import QThreadPool, Qt, QTimer
+from PySide6.QtCore import QThreadPool, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
@@ -28,6 +28,8 @@ from .transfer import TransferDirection, TransferSpec
 from .transfer_queue import TransferQueue
 from .transfer_ui import TransferQueuePanel
 from .viewer import ImageViewer
+from .settings_page import SettingsPage
+from .settings_store import AppSettings, SettingsStore
 from .workers import FunctionTask, detach_all_tasks
 
 
@@ -85,10 +87,11 @@ def _read_home_snapshot(
 class HomeDashboard(QWidget):
     """Connection and battery summary; ADB reads run outside the GUI thread."""
 
-    REFRESH_INTERVAL_MS = 30_000
+    phone_info_changed = Signal(str, str, str)
 
     def __init__(
-        self, manager: DeviceManager, transfer_queue: TransferQueue, parent=None
+        self, manager: DeviceManager, transfer_queue: TransferQueue, parent=None,
+        refresh_interval_seconds: int = 30,
     ) -> None:
         super().__init__(parent)
         self._manager = manager
@@ -100,6 +103,10 @@ class HomeDashboard(QWidget):
         self._request_expected_generation = 0
         self._last_request_at = 0.0
         self._include_android_version = False
+        self.refresh_interval_seconds = min(300, max(15, int(refresh_interval_seconds)))
+        self.phone_model = ""
+        self.android_version = ""
+        self.adb_serial = ""
 
         self.connection_label = QLabel("No phone connected")
         self.model_label = QLabel("Model: —")
@@ -136,7 +143,7 @@ class HomeDashboard(QWidget):
         layout.addStretch(1)
 
         self._refresh_timer = QTimer(self)
-        self._refresh_timer.setInterval(self.REFRESH_INTERVAL_MS)
+        self._refresh_timer.setInterval(self.refresh_interval_seconds * 1000)
         self._refresh_timer.timeout.connect(self._refresh_if_due)
         self._transfer_queue.changed.connect(self._refresh_if_due)
         self.set_connection(manager.state, manager.session)
@@ -147,12 +154,16 @@ class HomeDashboard(QWidget):
             if serial != self._serial:
                 self._request_generation += 1
                 self._serial = serial
+                self.android_version = ""
                 self.android_label.setText("Android version: —")
                 self._clear_battery()
                 self._include_android_version = True
             self.connection_label.setText("Connected over USB")
-            self.model_label.setText(f"Model: {session.device.model or 'Unknown'}")
+            self.phone_model = session.device.model or "Unknown"
+            self.adb_serial = serial
+            self.model_label.setText(f"Model: {self.phone_model}")
             self.serial_label.setText(f"ADB serial: {serial}")
+            self._emit_phone_info()
             if not self._refresh_timer.isActive():
                 self._refresh_timer.start()
             self._refresh_if_due(force=self._include_android_version)
@@ -162,6 +173,9 @@ class HomeDashboard(QWidget):
         self._serial = None
         self._refresh_timer.stop()
         self._include_android_version = False
+        self.phone_model = ""
+        self.android_version = ""
+        self.adb_serial = ""
         if state == ConnectionState.UNAUTHORIZED:
             self.connection_label.setText("Phone unauthorized")
         else:
@@ -170,6 +184,22 @@ class HomeDashboard(QWidget):
         self.android_label.setText("Android version: —")
         self.serial_label.setText("ADB serial: —")
         self._clear_battery()
+        self._emit_phone_info()
+
+    def _emit_phone_info(self) -> None:
+        self.phone_info_changed.emit(
+            self.phone_model, self.android_version, self.adb_serial
+        )
+
+    def set_refresh_interval(self, seconds: int) -> None:
+        self.refresh_interval_seconds = min(300, max(15, int(seconds)))
+        self._refresh_timer.setInterval(self.refresh_interval_seconds * 1000)
+
+    def refresh_device_info(self) -> None:
+        if self._serial is None:
+            return
+        self._include_android_version = True
+        self._refresh_if_due(force=True)
 
     def _clear_battery(self) -> None:
         self.battery_label.setText("Battery: —")
@@ -183,7 +213,11 @@ class HomeDashboard(QWidget):
         if self._transfer_queue.is_running:
             return
         now = time.monotonic()
-        if not force and now - self._last_request_at < self.REFRESH_INTERVAL_MS / 1000:
+        if (
+            not force
+            and not self._include_android_version
+            and now - self._last_request_at < self.refresh_interval_seconds
+        ):
             return
         serial = self._serial
         generation = self._request_generation
@@ -211,22 +245,29 @@ class HomeDashboard(QWidget):
         else:
             android_version, level, charge_state = result  # type: ignore[misc]
         if android_version:
+            self.android_version = android_version
             self.android_label.setText(f"Android version: {android_version}")
+        self._emit_phone_info()
         if level is None or not 0 <= level <= 100:
             self._clear_battery()
+            if self._include_android_version:
+                self._refresh_if_due(force=True)
             return
         self.battery_label.setText(f"Battery: {level}%")
         self.battery_bar.setValue(level)
         self.battery_bar.show()
         self.charging_label.setText(f"Charging state: {charge_state}")
+        if self._include_android_version:
+            self._refresh_if_due(force=True)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, manager: DeviceManager) -> None:
+    def __init__(self, manager: DeviceManager, settings_store: SettingsStore | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Phonebridge")
         self.resize(1100, 700)
         self._manager = manager
+        self.settings_store = settings_store or SettingsStore()
 
         self._status = QLabel()
         self._status.setMargin(8)
@@ -237,8 +278,14 @@ class MainWindow(QMainWindow):
 
         self.transfer_queue = TransferQueue(self)
         self.transfer_panel = TransferQueuePanel(self.transfer_queue)
-        self.home_dashboard = HomeDashboard(manager, self.transfer_queue)
+        self.home_dashboard = HomeDashboard(
+            manager, self.transfer_queue,
+            refresh_interval_seconds=self.settings_store.settings.battery_refresh_seconds,
+        )
+        self.settings_page = SettingsPage(self.settings_store, self.home_dashboard)
         self._conflict_prompts = {}
+        self._rename_attempts: dict[int, int] = {}
+        self._rename_original_names: dict[int, str] = {}
         self._viewer: ImageViewer | None = None
 
         files_page = QWidget()
@@ -253,6 +300,7 @@ class MainWindow(QMainWindow):
 
         self.pages = QTabWidget()
         self.pages.addTab(self.home_dashboard, "Home")
+        self.pages.addTab(self.settings_page, "Settings")
         self.pages.addTab(files_page, "Files")
         self.pages.addTab(self.transfer_panel, "Transfers")
 
@@ -278,8 +326,16 @@ class MainWindow(QMainWindow):
         self.transfer_queue.changed.connect(self._update_transport)
         manager.state_changed.connect(self._update_status)
         manager.state_changed.connect(self.home_dashboard.set_connection)
+        self.settings_page.preferences_changed.connect(self._apply_preferences)
+        if not self.settings_store.settings.show_home_on_startup:
+            self.pages.setCurrentWidget(files_page)
         self._update_status(manager.state, manager.session)
         self._update_transport()
+
+    def _apply_preferences(self, settings: object) -> None:
+        if not isinstance(settings, AppSettings):
+            return
+        self.home_dashboard.set_refresh_interval(settings.battery_refresh_seconds)
 
     def _open_image(self, path: str, paths: list[str], is_phone: bool) -> None:
         session = self._manager.session if is_phone else None
@@ -294,6 +350,14 @@ class MainWindow(QMainWindow):
     def _update_transport(self) -> None:
         text = "USB (ADB)" if self.transfer_queue.is_running else "—"
         self._transport_status.setText(f"Active transport: {text}")
+        active_ids = {
+            job.job_id for job in self.transfer_queue.jobs
+            if job.state.value in ("pending", "running")
+        }
+        for job_id in tuple(self._rename_attempts):
+            if job_id not in active_ids:
+                self._rename_attempts.pop(job_id, None)
+                self._rename_original_names.pop(job_id, None)
 
     def _copy_to_phone(self, sources: list[str]) -> None:
         session = self._manager.session
@@ -333,6 +397,31 @@ class MainWindow(QMainWindow):
     def _ask_destination_conflict(self, job: object, target: str) -> None:
         job_id = job.job_id
         if job_id in self._conflict_prompts:
+            return
+        behavior = self.settings_store.settings.default_conflict_behavior
+        if behavior == "Skip":
+            self.transfer_queue.resolve_conflict(job_id, "skip")
+            return
+        if behavior == "Overwrite":
+            self.transfer_queue.resolve_conflict(job_id, "overwrite")
+            return
+        if behavior == "Rename":
+            attempt = self._rename_attempts.get(job_id, 0) + 1
+            self._rename_attempts[job_id] = attempt
+            original = self._rename_original_names.get(job_id)
+            if original is None:
+                original = job.spec.target_name or (
+                    PurePosixPath(job.spec.source).name
+                    if job.spec.direction == TransferDirection.PHONE_TO_COMPUTER
+                    else Path(job.spec.source).name
+                )
+                self._rename_original_names[job_id] = original
+            name_path = PurePosixPath(original)
+            suffix = "".join(name_path.suffixes)
+            stem = original[:-len(suffix)] if suffix else original
+            self.transfer_queue.resolve_conflict(
+                job_id, "rename", f"{stem} ({attempt}){suffix}"
+            )
             return
         box = QMessageBox(self)
         box.setWindowTitle("Destination already exists")
