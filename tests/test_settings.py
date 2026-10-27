@@ -125,7 +125,7 @@ class SettingsPageTests(unittest.TestCase):
         window = MainWindow(self.manager, SettingsStore(self.store.path))
         self.assertEqual(
             [window.pages.tabText(index) for index in range(window.pages.count())],
-            ["Home", "Settings", "Media", "Files", "Transfers"],
+            ["Home", "Settings", "Media", "SMS", "Notifications", "Files", "Transfers"],
         )
         self.assertEqual(window.pages.tabText(window.pages.currentIndex()), "Files")
         window.close()
@@ -217,7 +217,7 @@ class ConflictPreferenceIntegrationTests(unittest.TestCase):
     def test_media_tab_is_after_settings_and_polling_tracks_visibility(self):
         self.assertEqual(
             [self.window.pages.tabText(index) for index in range(self.window.pages.count())],
-            ["Home", "Settings", "Media", "Files", "Transfers"],
+            ["Home", "Settings", "Media", "SMS", "Notifications", "Files", "Transfers"],
         )
         media = self.window.media_page
         self.assertFalse(media._timer.isActive())
@@ -226,6 +226,21 @@ class ConflictPreferenceIntegrationTests(unittest.TestCase):
         self.assertTrue(media._timer.isActive())
         self.window.pages.setCurrentWidget(self.window.home_dashboard)
         self.assertFalse(media._timer.isActive())
+        sms = self.window.sms_page
+        self.assertFalse(sms._timer.isActive())
+        self.window.pages.setCurrentWidget(sms)
+        self.assertTrue(wait_for(lambda: sms._task is None))
+        self.assertTrue(sms._timer.isActive())
+        self.window.pages.setCurrentWidget(self.window.home_dashboard)
+        self.assertFalse(sms._timer.isActive())
+        notifications = self.window.notifications_page
+        self.assertFalse(notifications._timer.isActive())
+        self.window.pages.setCurrentWidget(notifications)
+        self.assertTrue(wait_for(lambda: notifications._task is None))
+        self.assertTrue(notifications._timer.isActive())
+        self.assertEqual(notifications._timer.interval(), 5000)
+        self.window.pages.setCurrentWidget(self.window.home_dashboard)
+        self.assertFalse(notifications._timer.isActive())
         media.set_connection(ConnectionState.DISCONNECTED, None)
         self.assertEqual(media.status_label.text(), "No phone connected")
 

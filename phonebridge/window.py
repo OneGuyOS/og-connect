@@ -31,6 +31,8 @@ from .viewer import ImageViewer
 from .settings_page import SettingsPage
 from .settings_store import AppSettings, SettingsStore
 from .media_page import MediaPage
+from .sms_page import SmsPage
+from .notifications_page import NotificationsPage
 from .workers import FunctionTask, detach_all_tasks
 
 
@@ -285,6 +287,8 @@ class MainWindow(QMainWindow):
         )
         self.settings_page = SettingsPage(self.settings_store, self.home_dashboard)
         self.media_page = MediaPage(manager, self.transfer_queue)
+        self.sms_page = SmsPage(manager, self.transfer_queue)
+        self.notifications_page = NotificationsPage(manager, self.transfer_queue)
         self._conflict_prompts = {}
         self._rename_attempts: dict[int, int] = {}
         self._rename_original_names: dict[int, str] = {}
@@ -304,6 +308,8 @@ class MainWindow(QMainWindow):
         self.pages.addTab(self.home_dashboard, "Home")
         self.pages.addTab(self.settings_page, "Settings")
         self.pages.addTab(self.media_page, "Media")
+        self.pages.addTab(self.sms_page, "SMS")
+        self.pages.addTab(self.notifications_page, "Notifications")
         self.pages.addTab(files_page, "Files")
         self.pages.addTab(self.transfer_panel, "Transfers")
 
@@ -339,10 +345,18 @@ class MainWindow(QMainWindow):
         self.media_page.set_media_visible(
             self.pages.currentWidget() is self.media_page
         )
+        self.sms_page.set_sms_visible(self.pages.currentWidget() is self.sms_page)
+        self.notifications_page.set_notifications_visible(
+            self.pages.currentWidget() is self.notifications_page
+        )
 
     def _on_tab_changed(self, _index: int) -> None:
         self.media_page.set_media_visible(
             self.pages.currentWidget() is self.media_page
+        )
+        self.sms_page.set_sms_visible(self.pages.currentWidget() is self.sms_page)
+        self.notifications_page.set_notifications_visible(
+            self.pages.currentWidget() is self.notifications_page
         )
 
     def _apply_preferences(self, settings: object) -> None:
@@ -517,6 +531,8 @@ class MainWindow(QMainWindow):
         if timer is not None:
             timer.stop()
         self.media_page.set_media_visible(False)
+        self.sms_page.set_sms_visible(False)
+        self.notifications_page.set_notifications_visible(False)
         self.transfer_queue.cancel_all()
         if self._viewer is not None:
             self._viewer.close()
