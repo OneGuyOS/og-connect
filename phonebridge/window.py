@@ -30,6 +30,7 @@ from .transfer_ui import TransferQueuePanel
 from .viewer import ImageViewer
 from .settings_page import SettingsPage
 from .settings_store import AppSettings, SettingsStore
+from .media_page import MediaPage
 from .workers import FunctionTask, detach_all_tasks
 
 
@@ -283,6 +284,7 @@ class MainWindow(QMainWindow):
             refresh_interval_seconds=self.settings_store.settings.battery_refresh_seconds,
         )
         self.settings_page = SettingsPage(self.settings_store, self.home_dashboard)
+        self.media_page = MediaPage(manager, self.transfer_queue)
         self._conflict_prompts = {}
         self._rename_attempts: dict[int, int] = {}
         self._rename_original_names: dict[int, str] = {}
@@ -301,6 +303,7 @@ class MainWindow(QMainWindow):
         self.pages = QTabWidget()
         self.pages.addTab(self.home_dashboard, "Home")
         self.pages.addTab(self.settings_page, "Settings")
+        self.pages.addTab(self.media_page, "Media")
         self.pages.addTab(files_page, "Files")
         self.pages.addTab(self.transfer_panel, "Transfers")
 
@@ -326,11 +329,21 @@ class MainWindow(QMainWindow):
         self.transfer_queue.changed.connect(self._update_transport)
         manager.state_changed.connect(self._update_status)
         manager.state_changed.connect(self.home_dashboard.set_connection)
+        manager.state_changed.connect(self.media_page.set_connection)
         self.settings_page.preferences_changed.connect(self._apply_preferences)
+        self.pages.currentChanged.connect(self._on_tab_changed)
         if not self.settings_store.settings.show_home_on_startup:
             self.pages.setCurrentWidget(files_page)
         self._update_status(manager.state, manager.session)
         self._update_transport()
+        self.media_page.set_media_visible(
+            self.pages.currentWidget() is self.media_page
+        )
+
+    def _on_tab_changed(self, _index: int) -> None:
+        self.media_page.set_media_visible(
+            self.pages.currentWidget() is self.media_page
+        )
 
     def _apply_preferences(self, settings: object) -> None:
         if not isinstance(settings, AppSettings):
@@ -503,6 +516,7 @@ class MainWindow(QMainWindow):
         timer = getattr(self._manager, "_timer", None)
         if timer is not None:
             timer.stop()
+        self.media_page.set_media_visible(False)
         self.transfer_queue.cancel_all()
         if self._viewer is not None:
             self._viewer.close()

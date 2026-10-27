@@ -125,7 +125,7 @@ class SettingsPageTests(unittest.TestCase):
         window = MainWindow(self.manager, SettingsStore(self.store.path))
         self.assertEqual(
             [window.pages.tabText(index) for index in range(window.pages.count())],
-            ["Home", "Settings", "Files", "Transfers"],
+            ["Home", "Settings", "Media", "Files", "Transfers"],
         )
         self.assertEqual(window.pages.tabText(window.pages.currentIndex()), "Files")
         window.close()
@@ -213,6 +213,21 @@ class ConflictPreferenceIntegrationTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: job.state in (JobState.DONE, JobState.CANCELED, JobState.FAILED)))
         self.assertEqual(self.window._conflict_prompts, {})
         return job
+
+    def test_media_tab_is_after_settings_and_polling_tracks_visibility(self):
+        self.assertEqual(
+            [self.window.pages.tabText(index) for index in range(self.window.pages.count())],
+            ["Home", "Settings", "Media", "Files", "Transfers"],
+        )
+        media = self.window.media_page
+        self.assertFalse(media._timer.isActive())
+        self.window.pages.setCurrentWidget(media)
+        self.assertTrue(wait_for(lambda: media._request_task is None))
+        self.assertTrue(media._timer.isActive())
+        self.window.pages.setCurrentWidget(self.window.home_dashboard)
+        self.assertFalse(media._timer.isActive())
+        media.set_connection(ConnectionState.DISCONNECTED, None)
+        self.assertEqual(media.status_label.text(), "No phone connected")
 
     def test_skip_overwrite_and_rename_are_automatic(self):
         skipped = self._copy_conflicting("Skip", "duplicate.bin", b"keep skip")
