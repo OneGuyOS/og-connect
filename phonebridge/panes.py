@@ -7,12 +7,14 @@ from pathlib import Path
 import shlex
 from typing import Optional
 
-from PySide6.QtCore import QDir, QModelIndex, Qt, QThreadPool
+from PySide6.QtCore import QDir, QModelIndex, Qt, QThreadPool, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileSystemModel,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QStackedWidget,
     QTableView,
@@ -38,8 +40,11 @@ def _list_phone_directory(serial: str, path: str):
 class ComputerPane(QWidget):
     """Browse the home directory with QFileSystemModel's live updates."""
 
-    def __init__(self, parent=None) -> None:
+    copy_to_phone_requested = Signal(object)
+
+    def __init__(self, manager: DeviceManager, parent=None) -> None:
         super().__init__(parent)
+        self._manager = manager
         self.home = str(Path.home().resolve())
         self.current_path = self.home
         self._model = self._new_model()
@@ -53,10 +58,13 @@ class ComputerPane(QWidget):
         self.view = QTreeView()
         self.view.setModel(self._model)
         self.view.setRootIndex(self._model.index(self.current_path))
-        self.view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.view.setSortingEnabled(True)
         self.view.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.view.activated.connect(self._activate)
+        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._show_context_menu)
 
         bar = QHBoxLayout()
         bar.addWidget(title)
@@ -80,6 +88,37 @@ class ComputerPane(QWidget):
     def _activate(self, index: QModelIndex) -> None:
         if self._model.isDir(index):
             self.navigate(self._model.filePath(index))
+
+    def _show_context_menu(self, position) -> None:
+        index = self.view.indexAt(position)
+        if index.isValid() and not self.view.selectionModel().isSelected(index):
+            self.view.clearSelection()
+            self.view.selectRow(index.row())
+        selected = self.view.selectionModel().selectedRows(0)
+        paths = [self._model.filePath(item) for item in selected]
+        files = [path for path in paths if not self._model.isDir(self._model.index(path))]
+        has_directories = len(files) != len(paths)
+        connected = self._manager.session is not None
+
+        menu = QMenu(self)
+        self._context_menu = menu
+        if not connected:
+            copy_text = "Copy to Phone (phone disconnected)"
+        elif has_directories:
+            copy_text = "Copy to Phone (files only)"
+        elif not files:
+            copy_text = "Copy to Phone (select a file)"
+        else:
+            copy_text = "Copy to Phone"
+        copy_action = QAction(copy_text, menu)
+        copy_action.setEnabled(connected and bool(files) and not has_directories)
+        copy_action.triggered.connect(lambda: self.copy_to_phone_requested.emit(files))
+        menu.addAction(copy_action)
+        image_action = QAction("Open image (viewer not implemented)", menu)
+        image_action.setEnabled(False)
+        menu.addAction(image_action)
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(self.view.viewport().mapToGlobal(position))
 
     def navigate(self, path: str) -> None:
         resolved = os.path.abspath(path)
@@ -109,6 +148,8 @@ class ComputerPane(QWidget):
 class PhonePane(QWidget):
     """Browse `/storage/emulated/0` over the active USB ADB session."""
 
+    copy_to_computer_requested = Signal(object)
+
     def __init__(self, manager: DeviceManager, parent=None) -> None:
         super().__init__(parent)
         self._manager = manager
@@ -132,11 +173,13 @@ class PhonePane(QWidget):
         self.view = QTableView()
         self.view.setModel(self._model)
         self.view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.view.setSortingEnabled(False)
         self.view.horizontalHeader().sectionClicked.connect(self._sort_by_column)
         self.view.activated.connect(self._activate)
+        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._show_context_menu)
 
         self.status = QLabel("Phone disconnected")
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -257,6 +300,39 @@ class PhonePane(QWidget):
         entry = self._model.entry_at(index.row())
         if entry is not None and entry.is_dir:
             self.navigate(entry.name)
+
+    def _show_context_menu(self, position) -> None:
+        index = self.view.indexAt(position)
+        if index.isValid() and not self.view.selectionModel().isSelected(index):
+            self.view.clearSelection()
+            self.view.selectRow(index.row())
+        selected = self.view.selectionModel().selectedRows(0)
+        entries = [self._model.entry_at(item.row()) for item in selected]
+        entries = [entry for entry in entries if entry is not None]
+        files = [entry for entry in entries if not entry.is_dir]
+        has_directories = len(files) != len(entries)
+        connected = self._manager.session is not None and self._serial is not None
+
+        menu = QMenu(self)
+        self._context_menu = menu
+        if not connected:
+            copy_text = "Copy to Computer (phone disconnected)"
+        elif has_directories:
+            copy_text = "Copy to Computer (files only)"
+        elif not files:
+            copy_text = "Copy to Computer (select a file)"
+        else:
+            copy_text = "Copy to Computer"
+        paths = [(str(Path(self.current_path, entry.name)), entry.size) for entry in files]
+        copy_action = QAction(copy_text, menu)
+        copy_action.setEnabled(connected and bool(files) and not has_directories)
+        copy_action.triggered.connect(lambda: self.copy_to_computer_requested.emit(paths))
+        menu.addAction(copy_action)
+        image_action = QAction("Open image (viewer not implemented)", menu)
+        image_action.setEnabled(False)
+        menu.addAction(image_action)
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(self.view.viewport().mapToGlobal(position))
 
     def navigate(self, name: str) -> None:
         if self._manager.session is None or self._serial is None:
