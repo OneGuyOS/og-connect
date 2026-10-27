@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-import shlex
 import shutil
 import subprocess
 from typing import Optional, Sequence
@@ -40,13 +39,14 @@ def get_adb_path() -> str:
     return adb_path
 
 
-def list_devices() -> list[AdbDevice]:
+def list_devices(timeout: Optional[float] = None) -> list[AdbDevice]:
     """Run `adb devices -l` and parse connected device details."""
     result = subprocess.run(
         [get_adb_path(), "devices", "-l"],
         check=True,
         capture_output=True,
         text=True,
+        timeout=timeout,
     )
     devices: list[AdbDevice] = []
     for raw_line in result.stdout.splitlines():
@@ -88,13 +88,16 @@ def _serial_args(serial: str) -> list[str]:
     return ["-s", serial]
 
 
-def shell(serial: str, command: str) -> subprocess.CompletedProcess[str]:
+def shell(
+    serial: str, command: str, timeout: Optional[float] = None
+) -> subprocess.CompletedProcess[str]:
     """Run one command through the selected device's Android shell."""
     return subprocess.run(
         [get_adb_path(), *_serial_args(serial), "shell", command],
         check=True,
         capture_output=True,
         text=True,
+        timeout=timeout,
     )
 
 
