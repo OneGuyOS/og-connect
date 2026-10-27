@@ -1,17 +1,17 @@
-"""adb.py - Thin wrapper around the adb executable.
+"""Small, Qt-free wrapper around the adb executable."""
 
-Does not import Qt. Pure standard library subprocess wrapper for ADB commands.
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import shlex
 import shutil
 import subprocess
 from typing import Optional, Sequence
 
 
 class AdbNotFoundError(FileNotFoundError):
-    """Raised when the adb binary cannot be located."""
+    """Raised when the adb executable cannot be located."""
 
 
 @dataclass(frozen=True)
@@ -25,128 +25,85 @@ class AdbDevice:
 
     @property
     def is_usable(self) -> bool:
-        """A device is usable only if state == 'device' and transport == 'usb'."""
         return self.state == "device" and self.transport == "usb"
 
 
 def get_adb_path() -> str:
-    """Locate adb via $ADB env var, else shutil.which('adb').
-
-    Raises AdbNotFoundError if missing or not executable.
-    """
-    adb_path = os.environ.get("ADB")
-    if not adb_path:
-        adb_path = shutil.which("adb")
-
+    """Return the configured adb executable or raise a clear error."""
+    adb_path = os.environ.get("ADB") or shutil.which("adb")
     if not adb_path:
         raise AdbNotFoundError(
-            "ADB executable not found. Ensure 'adb' is installed and in PATH, "
-            "or set the $ADB environment variable."
+            "ADB executable not found. Install 'adb', add it to PATH, or set $ADB."
         )
-
     if not os.path.isfile(adb_path) or not os.access(adb_path, os.X_OK):
-        raise AdbNotFoundError(f"ADB path '{adb_path}' is not an executable file.")
-
+        raise AdbNotFoundError(f"ADB path {adb_path!r} is not an executable file.")
     return adb_path
 
 
 def list_devices() -> list[AdbDevice]:
-    """Runs `adb devices -l` and parses serial, state, transport, model, product, device.
-
-    A serial containing ':' means TCP/IP ('tcp'). Everything else is 'usb'.
-    """
-    adb = get_adb_path()
-    res = subprocess.run([adb, "devices", "-l"], capture_output=True, text=True, check=True)
-
+    """Run `adb devices -l` and parse connected device details."""
+    result = subprocess.run(
+        [get_adb_path(), "devices", "-l"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     devices: list[AdbDevice] = []
-    for raw_line in res.stdout.splitlines():
+    for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("List of devices attached") or line.startswith("*"):
             continue
-
         parts = line.split()
         if len(parts) < 2:
             continue
 
         serial = parts[0]
-        transport = "tcp" if ":" in serial else "usb"
-
-        # Handle two-word states such as 'no permissions'
-        if len(parts) >= 3 and parts[1] == "no" and parts[2] == "permissions":
+        state = parts[1]
+        qualifiers = parts[2:]
+        if state == "no" and qualifiers[:1] == ["permissions"]:
             state = "no permissions"
-            qualifiers = parts[3:]
-        else:
-            state = parts[1]
-            qualifiers = parts[2:]
+            qualifiers = qualifiers[1:]
 
-        model: Optional[str] = None
-        product: Optional[str] = None
-        device: Optional[str] = None
-
+        attributes: dict[str, str] = {}
         for item in qualifiers:
-            if item.startswith("model:"):
-                model = item.split(":", 1)[1]
-            elif item.startswith("product:"):
-                product = item.split(":", 1)[1]
-            elif item.startswith("device:"):
-                device = item.split(":", 1)[1]
-
+            key, separator, value = item.partition(":")
+            if separator:
+                attributes[key] = value
         devices.append(
             AdbDevice(
                 serial=serial,
                 state=state,
-                transport=transport,
-                model=model,
-                product=product,
-                device=device,
+                transport="tcp" if ":" in serial else "usb",
+                model=attributes.get("model"),
+                product=attributes.get("product"),
+                device=attributes.get("device"),
             )
         )
-
     return devices
 
 
-def shell(
-    serial: str,
-    command: str | Sequence[str],
-    timeout: Optional[float] = None,
-    check: bool = False,
-) -> subprocess.CompletedProcess[str]:
-    """Execute `adb -s <serial> shell <command>`.
-
-    Every call must take an explicit serial and pass `-s <serial>`.
-    """
+def _serial_args(serial: str) -> list[str]:
     if not serial:
-        raise ValueError("An explicit device serial must be provided.")
-
-    adb = get_adb_path()
-    if isinstance(command, str):
-        cmd = [adb, "-s", serial, "shell", command]
-    else:
-        cmd = [adb, "-s", serial, "shell", *command]
-
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=check)
+        raise ValueError("An explicit ADB serial is required.")
+    return ["-s", serial]
 
 
-def exec_out_popen(
-    serial: str,
-    argv: Sequence[str] | str,
-    **kwargs,
-) -> subprocess.Popen:
-    """Execute `adb -s <serial> exec-out <argv...>` via subprocess.Popen.
+def shell(serial: str, command: str) -> subprocess.CompletedProcess[str]:
+    """Run one command through the selected device's Android shell."""
+    return subprocess.run(
+        [get_adb_path(), *_serial_args(serial), "shell", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
-    Every call must take an explicit serial and pass `-s <serial>`.
-    """
-    if not serial:
-        raise ValueError("An explicit device serial must be provided.")
 
-    adb = get_adb_path()
-    if isinstance(argv, str):
-        cmd_args = [argv]
-    else:
-        cmd_args = list(argv)
-
-    cmd = [adb, "-s", serial, "exec-out", *cmd_args]
-    if "stdout" not in kwargs:
-        kwargs["stdout"] = subprocess.PIPE
-
-    return subprocess.Popen(cmd, **kwargs)
+def exec_out_popen(serial: str, argv: Sequence[str]) -> subprocess.Popen[bytes]:
+    """Start `adb exec-out` for the selected device and return its process."""
+    if not argv:
+        raise ValueError("At least one command argument is required.")
+    return subprocess.Popen(
+        [get_adb_path(), *_serial_args(serial), "exec-out", *argv],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )

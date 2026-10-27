@@ -1,11 +1,11 @@
-"""__main__.py - Entry point: python -m phonebridge."""
+"""Launch Phonebridge."""
 
 import sys
 
 from PySide6.QtWidgets import QApplication
 
-from phonebridge.device import DeviceManager
-from phonebridge.window import MainWindow
+from .device import DeviceManager
+from .window import MainWindow
 
 
 def main() -> int:
@@ -17,4 +17,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

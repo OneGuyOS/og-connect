@@ -1,3 +1,3 @@
-"""phonebridge - Linux desktop companion for Android over USB."""
+"""Phonebridge USB phone connection status app."""
 
 __version__ = "0.1.0"
