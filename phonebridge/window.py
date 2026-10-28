@@ -10,11 +10,13 @@ from pathlib import Path, PurePosixPath
 from PySide6.QtCore import QThreadPool, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QCheckBox,
     QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QPushButton,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -33,6 +35,7 @@ from .settings_store import AppSettings, SettingsStore
 from .media_page import MediaPage
 from .sms_page import SmsPage
 from .notifications_page import NotificationsPage
+from .scrcpy_manager import ScrcpyManager
 from .workers import FunctionTask, detach_all_tasks
 
 
@@ -271,11 +274,19 @@ class MainWindow(QMainWindow):
         self.resize(1100, 700)
         self._manager = manager
         self.settings_store = settings_store or SettingsStore()
+        self.scrcpy_manager = ScrcpyManager(self)
+        self._scrcpy_stop_task: FunctionTask | None = None
 
         self._status = QLabel()
         self._status.setMargin(8)
         self._status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._transport_status = QLabel("Active transport: —")
+        self.screen_button = QPushButton("Screen")
+        self.screen_button.setEnabled(False)
+        self.view_only_checkbox = QCheckBox("View only")
+        self.scrcpy_status = QLabel("")
+        self.screen_button.clicked.connect(self._launch_scrcpy)
+        self.scrcpy_manager.process_exited.connect(self._scrcpy_process_exited)
         self.computer_pane = ComputerPane(manager)
         self.phone_pane = PhonePane(manager)
 
@@ -319,6 +330,9 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.addWidget(self._status, 1)
         header.addWidget(self._transport_status)
+        header.addWidget(self.screen_button)
+        header.addWidget(self.view_only_checkbox)
+        header.addWidget(self.scrcpy_status)
         layout.addLayout(header)
         layout.addWidget(self.pages, 1)
         self.setCentralWidget(central)
@@ -334,6 +348,7 @@ class MainWindow(QMainWindow):
         self.transfer_queue.conflict_needed.connect(self._ask_destination_conflict)
         self.transfer_queue.changed.connect(self._update_transport)
         manager.state_changed.connect(self._update_status)
+        manager.state_changed.connect(self._handle_scrcpy_connection)
         manager.state_changed.connect(self.home_dashboard.set_connection)
         manager.state_changed.connect(self.media_page.set_connection)
         self.settings_page.preferences_changed.connect(self._apply_preferences)
@@ -512,6 +527,9 @@ class MainWindow(QMainWindow):
         dialog.open()
 
     def _update_status(self, state: object, session: object) -> None:
+        self.screen_button.setEnabled(
+            state == ConnectionState.USB and isinstance(session, PhoneSession)
+        )
         if state == ConnectionState.UNAUTHORIZED:
             text = "Phone unauthorized — check the prompt on your phone"
         elif state == ConnectionState.USB and isinstance(session, PhoneSession):
@@ -526,10 +544,68 @@ class MainWindow(QMainWindow):
             text = "No phone connected"
         self._status.setText(text)
 
+    def _launch_scrcpy(self) -> None:
+        session = self._manager.session
+        if self._manager.state != ConnectionState.USB or not isinstance(
+            session, PhoneSession
+        ):
+            return
+        was_running = self.scrcpy_manager.is_running()
+        geometry = self.frameGeometry()
+        try:
+            self.scrcpy_manager.start(
+                session.device.serial,
+                view_only=self.view_only_checkbox.isChecked(),
+                window_position=(geometry.right() + 16, geometry.top()),
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            self.scrcpy_status.setText(str(error))
+            return
+        self.scrcpy_status.setText(
+            "Screen mirroring is already running."
+            if was_running
+            else "Screen mirroring started."
+        )
+
+    def _handle_scrcpy_connection(self, state: object, _session: object) -> None:
+        if state == ConnectionState.USB:
+            if self.scrcpy_status.text().startswith("Phone disconnected"):
+                self.scrcpy_status.clear()
+            return
+        if not self.scrcpy_manager.is_running():
+            if self.scrcpy_status.text().startswith("Screen mirroring"):
+                self.scrcpy_status.setText(
+                    "Phone disconnected — screen mirroring stopped."
+                )
+            return
+        self.scrcpy_status.setText("Phone disconnected — stopping screen mirroring.")
+        if self._scrcpy_stop_task is not None:
+            return
+        task = FunctionTask(self.scrcpy_manager.stop)
+        self._scrcpy_stop_task = task
+        task.signals.completed.connect(self._finish_scrcpy_stop)
+        QThreadPool.globalInstance().start(task)
+
+    def _finish_scrcpy_stop(self, _result: object, error: object) -> None:
+        self._scrcpy_stop_task = None
+        if error is not None:
+            self.scrcpy_status.setText(f"Could not stop screen mirroring: {error}")
+
+    def _scrcpy_process_exited(self, return_code: int) -> None:
+        if self._manager.state != ConnectionState.USB:
+            self.scrcpy_status.setText("Phone disconnected — screen mirroring stopped.")
+        elif return_code == 0:
+            self.scrcpy_status.setText("Screen mirroring window closed.")
+        else:
+            self.scrcpy_status.setText(
+                f"Screen mirroring exited (code {return_code})."
+            )
+
     def closeEvent(self, event) -> None:
         timer = getattr(self._manager, "_timer", None)
         if timer is not None:
             timer.stop()
+        self.scrcpy_manager.stop()
         self.media_page.set_media_visible(False)
         self.sms_page.set_sms_visible(False)
         self.notifications_page.set_notifications_visible(False)

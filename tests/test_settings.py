@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from PySide6.QtCore import QObject, QEventLoop, QTimer, Signal
 from PySide6.QtWidgets import QApplication
@@ -243,6 +243,29 @@ class ConflictPreferenceIntegrationTests(unittest.TestCase):
         self.assertFalse(notifications._timer.isActive())
         media.set_connection(ConnectionState.DISCONNECTED, None)
         self.assertEqual(media.status_label.text(), "No phone connected")
+
+    def test_screen_action_uses_session_serial_view_only_and_stops_on_disconnect(self):
+        self.assertTrue(self.window.screen_button.isEnabled())
+        self.window.view_only_checkbox.setChecked(True)
+        with patch.object(self.window.scrcpy_manager, "start") as start:
+            self.window._launch_scrcpy()
+        start.assert_called_once_with(
+            self.manager.session.device.serial,
+            view_only=True,
+            window_position=ANY,
+        )
+        self.assertIn("started", self.window.scrcpy_status.text())
+
+        self.window._update_status(ConnectionState.DISCONNECTED, None)
+        self.assertFalse(self.window.screen_button.isEnabled())
+        with patch.object(
+            self.window.scrcpy_manager, "is_running", return_value=True
+        ), patch.object(self.window.scrcpy_manager, "stop") as stop:
+            self.window._handle_scrcpy_connection(ConnectionState.DISCONNECTED, None)
+            self.assertTrue(wait_for(lambda: self.window._scrcpy_stop_task is None))
+        stop.assert_called_once()
+        self.assertIn("Phone disconnected", self.window.scrcpy_status.text())
+        self.window._update_status(ConnectionState.USB, self.manager.session)
 
     def test_skip_overwrite_and_rename_are_automatic(self):
         skipped = self._copy_conflicting("Skip", "duplicate.bin", b"keep skip")
