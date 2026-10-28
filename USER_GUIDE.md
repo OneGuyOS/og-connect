@@ -109,3 +109,13 @@ An image won't open
 
 6. Source and license
 OG Connect is released under GPL-3.0. You may use, study, modify, and redistribute it. If you distribute a modified version, you must publish the source under the same license.
+
+---
+
+## 7. Screen Mirroring (Update)
+
+OG Connect now supports screen mirroring via `scrcpy`.
+- Go to the **Screen** tab and click **Launch Screen**.
+- The phone screen will open in a new window next to OG Connect.
+- **Input control:** By default, you can use your mouse and keyboard to control the phone. Uncheck "Enable input control" to make it view-only.
+- **Cleanup:** The mirror will close automatically if you close the window, click "Close Screen", disconnect the phone, or close OG Connect.
