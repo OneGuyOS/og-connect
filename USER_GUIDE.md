@@ -119,3 +119,6 @@ OG Connect now supports screen mirroring via `scrcpy`.
 - The phone screen will open in a new window next to OG Connect.
 - **Input control:** By default, you can use your mouse and keyboard to control the phone. Uncheck "Enable input control" to make it view-only.
 - **Cleanup:** The mirror will close automatically if you close the window, click "Close Screen", disconnect the phone, or close OG Connect.
+
+### Samsung DeX (Virtual Display)
+If you have a Samsung phone, you can check the **Launch in DeX Mode** box in the Screen tab. This launches a virtual 1080p desktop environment instead of mirroring the phone screen. It includes full mouse and keyboard support, and is configured to pass media audio correctly.
