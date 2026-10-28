@@ -79,7 +79,7 @@ class ScrcpyManagerTests(unittest.TestCase):
         self.assertIs(first, child)
         self.assertIs(second, child)
         popen.assert_called_once_with(
-            ["scrcpy", "-s", "USB-SERIAL", "--window-x", "1234", "--window-y", "40", "--no-control"],
+            ["scrcpy", "-s", "USB-SERIAL", "--audio-source=playback", "--window-x", "1234", "--window-y", "40", "--no-control"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -96,7 +96,21 @@ class ScrcpyManagerTests(unittest.TestCase):
         ):
             self.assertEqual(
                 self.manager._command("USB-SERIAL", False, (400, 20)),
-                ["scrcpy", "-s", "USB-SERIAL"],
+                ["scrcpy", "-s", "USB-SERIAL", "--audio-source=playback"],
+            )
+
+    def test_dex_mode_adds_virtual_display_and_audio_is_always_enabled(self):
+        with patch.dict(os.environ, {"XDG_SESSION_TYPE": "x11", "WAYLAND_DISPLAY": ""}, clear=False):
+            self.assertEqual(
+                self.manager._command("USB-SERIAL", False, (400, 20), dex_mode=True),
+                [
+                    "scrcpy", "-s", "USB-SERIAL", "--audio-source=playback",
+                    "--new-display=1920x1080/284", "--window-x", "400", "--window-y", "20",
+                ],
+            )
+            self.assertEqual(
+                self.manager._command("USB-SERIAL", True, (400, 20), dex_mode=False),
+                ["scrcpy", "-s", "USB-SERIAL", "--audio-source=playback", "--window-x", "400", "--window-y", "20", "--no-control"],
             )
 
     def test_stop_escalates_only_the_stored_child_after_timeout(self):

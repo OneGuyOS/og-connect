@@ -551,6 +551,7 @@ class MainWindow(QMainWindow):
                 session.device.serial,
                 view_only=view_only,
                 window_position=(geometry.x() + geometry.width() + 10, geometry.y()),
+                dex_mode=self.screen_page.dex_checkbox.isChecked(),
             )
         except (OSError, RuntimeError, ValueError) as error:
             self.screen_page.set_status(str(error))

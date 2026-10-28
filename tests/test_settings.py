@@ -248,12 +248,17 @@ class ConflictPreferenceIntegrationTests(unittest.TestCase):
         page = self.window.screen_page
         self.assertTrue(page.action_button.isEnabled())
         page.control_checkbox.setChecked(False)
+        page.dex_checkbox.setChecked(True)
         with patch.object(self.window.scrcpy_manager, "start") as start:
             self.window._launch_scrcpy()
         start.assert_called_once_with(
             self.manager.session.device.serial,
             view_only=True,
             window_position=ANY,
+            dex_mode=True,
+        )
+        self.assertEqual(
+            page.dex_checkbox.text(), "Launch in DeX Mode (Virtual Display)"
         )
         self.assertEqual(page.status_label.text(), "Screen running — View only")
 
