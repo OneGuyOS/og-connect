@@ -35,8 +35,7 @@ class ScrcpyManager(QObject):
         session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
         wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or session_type == "wayland"
         x11 = not wayland and (
-            session_type in {"x11", "xorg"}
-            or (not session_type and bool(os.environ.get("DISPLAY")))
+            session_type == "x11" or not os.environ.get("WAYLAND_DISPLAY")
         )
         if x11 and window_position is not None:
             x, y = window_position

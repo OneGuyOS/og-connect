@@ -125,7 +125,7 @@ class SettingsPageTests(unittest.TestCase):
         window = MainWindow(self.manager, SettingsStore(self.store.path))
         self.assertEqual(
             [window.pages.tabText(index) for index in range(window.pages.count())],
-            ["Home", "Settings", "Media", "SMS", "Notifications", "Files", "Transfers"],
+            ["Home", "Settings", "Media", "SMS", "Notifications", "Screen", "Files", "Transfers"],
         )
         self.assertEqual(window.pages.tabText(window.pages.currentIndex()), "Files")
         window.close()
@@ -217,7 +217,7 @@ class ConflictPreferenceIntegrationTests(unittest.TestCase):
     def test_media_tab_is_after_settings_and_polling_tracks_visibility(self):
         self.assertEqual(
             [self.window.pages.tabText(index) for index in range(self.window.pages.count())],
-            ["Home", "Settings", "Media", "SMS", "Notifications", "Files", "Transfers"],
+            ["Home", "Settings", "Media", "SMS", "Notifications", "Screen", "Files", "Transfers"],
         )
         media = self.window.media_page
         self.assertFalse(media._timer.isActive())
@@ -245,8 +245,9 @@ class ConflictPreferenceIntegrationTests(unittest.TestCase):
         self.assertEqual(media.status_label.text(), "No phone connected")
 
     def test_screen_action_uses_session_serial_view_only_and_stops_on_disconnect(self):
-        self.assertTrue(self.window.screen_button.isEnabled())
-        self.window.view_only_checkbox.setChecked(True)
+        page = self.window.screen_page
+        self.assertTrue(page.action_button.isEnabled())
+        page.control_checkbox.setChecked(False)
         with patch.object(self.window.scrcpy_manager, "start") as start:
             self.window._launch_scrcpy()
         start.assert_called_once_with(
@@ -254,17 +255,17 @@ class ConflictPreferenceIntegrationTests(unittest.TestCase):
             view_only=True,
             window_position=ANY,
         )
-        self.assertIn("started", self.window.scrcpy_status.text())
+        self.assertEqual(page.status_label.text(), "Screen running — View only")
 
         self.window._update_status(ConnectionState.DISCONNECTED, None)
-        self.assertFalse(self.window.screen_button.isEnabled())
+        self.assertFalse(page.action_button.isEnabled())
         with patch.object(
             self.window.scrcpy_manager, "is_running", return_value=True
         ), patch.object(self.window.scrcpy_manager, "stop") as stop:
             self.window._handle_scrcpy_connection(ConnectionState.DISCONNECTED, None)
             self.assertTrue(wait_for(lambda: self.window._scrcpy_stop_task is None))
         stop.assert_called_once()
-        self.assertIn("Phone disconnected", self.window.scrcpy_status.text())
+        self.assertIn("Phone disconnected", page.status_label.text())
         self.window._update_status(ConnectionState.USB, self.manager.session)
 
     def test_skip_overwrite_and_rename_are_automatic(self):
